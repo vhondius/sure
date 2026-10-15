@@ -1,0 +1,76 @@
+# Sure with commodities (precious metals), one stack. Paste into a new Dockge
+# stack and set the two secrets in the stack's .env:
+#   POSTGRES_PASSWORD=<strong password>
+#   SECRET_KEY_BASE=<output of: openssl rand -hex 64>
+# Web UI on http://<server>:3000 (change PORT in .env). The first visit
+# creates your account. Metal prices need no API key.
+# Update: Dockge "Update" pulls the latest :commodities image. Roll back by
+# pinning a :sha-<commit> tag. Based on compose.example.yml from upstream.
+
+x-db-env: &db_env
+  POSTGRES_USER: ${POSTGRES_USER:-sure_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-sure_production}
+
+x-app: &app
+  image: ghcr.io/vhondius/sure:commodities
+  volumes:
+    - ./storage:/rails/storage
+  environment:
+    <<: *db_env
+    SECRET_KEY_BASE: ${SECRET_KEY_BASE:?Set SECRET_KEY_BASE in .env}
+    SELF_HOSTED: "true"
+    RAILS_FORCE_SSL: "false"
+    RAILS_ASSUME_SSL: "false"
+    DB_HOST: db
+    DB_PORT: 5432
+    REDIS_URL: redis://redis:6379/1
+    TZ: Europe/Amsterdam
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  # IPv4-preferring DNS, as upstream: Yahoo Finance can hang on IPv6.
+  dns:
+    - 8.8.8.8
+    - 1.1.1.1
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *app
+    container_name: sure
+    ports:
+      - "${PORT:-3000}:3000"
+
+  worker:
+    <<: *app
+    container_name: sure-worker
+    command: bundle exec sidekiq
+
+  db:
+    image: postgres:16
+    container_name: sure-db
+    volumes:
+      - ./postgres:/var/lib/postgresql/data
+    environment:
+      <<: *db_env
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: sure-redis
+    volumes:
+      - ./redis:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
