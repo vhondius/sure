@@ -6,6 +6,9 @@
 # creates your account. Metal prices need no API key.
 # Update: Dockge "Update" pulls the latest :commodities image. Roll back by
 # pinning a :sha-<commit> tag. Based on compose.example.yml from upstream.
+# Optional daily backups (database, files, .env and this file) to ./backups:
+#   docker compose --profile backup up -d backup
+# One now: docker compose run --rm backup create
 
 x-db-env: &db_env
   POSTGRES_USER: ${POSTGRES_USER:-sure_user}
@@ -48,6 +51,30 @@ services:
     <<: *app
     container_name: sure-worker
     command: bundle exec sidekiq
+
+  backup:
+    profiles:
+      - backup
+    image: ghcr.io/vhondius/sure:commodities
+    container_name: sure-backup
+    # Root so it can write the backup folder; uploaded files keep their owner.
+    user: "0"
+    entrypoint: [ "bin/sure-backup" ]
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+      - ./storage:/rails/storage
+      - .:/config:ro
+    environment:
+      <<: *db_env
+      POSTGRES_HOST: db
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      INSTANCE_ID: ${INSTANCE_ID:-default}
+      TZ: Europe/Amsterdam
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   db:
     image: postgres:16
